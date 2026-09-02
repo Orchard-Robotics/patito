@@ -1586,7 +1586,7 @@ dev = [
     { name = "nox-uv", specifier = ">=0.6.0" },
     { name = "pandas-stubs", specifier = ">=1.2.0" },
     { name = "pre-commit", specifier = ">=3.8.0,<4" },
-    { name = "pyright", specifier = ">=1.1.239" },
+    { name = "pyright", specifier = ">=1.1.394" },
     { name = "pytest", specifier = ">=7.1.2" },
     { name = "pytest-cov", specifier = ">=3.0.0" },
     { name = "pytest-watcher", marker = "python_full_version >= '3.9' and python_full_version < '4'", specifier = ">=0.2.3" },

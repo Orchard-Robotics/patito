@@ -686,3 +686,15 @@ def test_list_enum_examples() -> None:
 
     df = Schema.examples({"a": [0, 1]})
     assert df.row(0) == (0, ["A"])
+
+
+def test_exmaple_column_order_18() -> None:
+    """Ensure correct order with iterable."""
+
+    class Test(pt.Model):
+        a: str
+        b: str
+
+    assert Test.examples({"a": ["1"], "b": ["2"]}).columns == ["a", "b"]
+    assert Test.examples({"a": ["1"]}).columns == ["a", "b"]
+    assert Test.examples({"b": ["2"]}).columns == ["a", "b"]

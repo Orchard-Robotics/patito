@@ -905,7 +905,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                     or column_name in cls.primary_key_columns
                 ):
                     unique_series.append(
-                        pl.first().cum_count().cast(dtype).alias(column_name)
+                        pl.int_range(pl.len()).cast(dtype).alias(column_name)
                     )
                 else:
                     example_value = cls.example_value(field=column_name)
@@ -922,7 +922,10 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                 series.append(pl.lit(value, dtype=dtype).alias(column_name))
 
         return cls.DataFrame._from_pydf(
-            pl.select(series).with_columns(unique_series)._df
+            pl.select(series)
+            .with_columns(unique_series)
+            .select(cls.columns)  # reorder columns
+            ._df
         )
 
     @classmethod
