@@ -40,7 +40,7 @@ dev = [
     "nox-uv>=0.6.0",
     "pandas-stubs>=1.2.0",
     "pre-commit>=3.8.0,<4",
-    "pyright>=1.1.239",
+    "pyright>=1.1.394",
     "pytest-cov>=3.0.0",
     "pytest-watcher>=0.2.3 ; python_version >= '3.9' and python_version < '4.0'",
     "pytest>=7.1.2",
@@ -96,7 +96,7 @@ show_missing = true
 typeCheckingMode = "basic"
 venvPath =  "."
 venv =  ".venv"
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 
 exclude = [
   ".venv",

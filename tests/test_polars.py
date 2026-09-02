@@ -65,7 +65,7 @@ def test_dataframe_set_model_method() -> None:
 
     modelled_df = pt.DataFrame().set_model(MyModel)
     assert modelled_df.model is MyModel
-    assert MyModel.DataFrame.model is MyModel
+    assert MyModel.DataFrame.model is MyModel  # type: ignore
 
 
 def test_lazyframe_from_existing() -> None:
