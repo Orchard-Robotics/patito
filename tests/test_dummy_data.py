@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal, Optional
 
 import polars as pl
@@ -58,8 +59,10 @@ def test_examples() -> None:
         d: Optional[list[str]] = pt.Field(dtype=pl.List(pl.String))
         e: list[int]
         f: int = pt.Field(ge=0)
+        g: float
+        h: Optional[Decimal] = pt.Field(dtype=pl.Decimal(precision=38, scale=2))
 
-    df = MyModel.examples({"a": [1, 2]})
+    df = MyModel.examples({"a": [1, 2], "h": ["12.22", "12.34"]})
     assert isinstance(df, pl.DataFrame)
     assert df.dtypes == [
         pl.Int64,
@@ -68,8 +71,10 @@ def test_examples() -> None:
         pl.List(pl.String),
         pl.List(pl.Int64),
         pl.Int64,
+        pl.Float64,
+        pl.Decimal,
     ]
-    assert df.columns == ["a", "b", "c", "d", "e", "f"]
+    assert df.columns == ["a", "b", "c", "d", "e", "f", "g", "h"]
     assert (df["f"] >= 0).all()
     MyModel.validate(df)
 

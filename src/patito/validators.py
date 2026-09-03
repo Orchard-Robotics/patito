@@ -357,6 +357,12 @@ def _find_errors(  # noqa: C901
             "minLength": lambda v, col=col: col.str.len_chars() >= v,
             "maxLength": lambda v, col=col: col.str.len_chars() <= v,
         }
+
+        # Remove string checks for non-string types
+        string_only = {"pattern", "minLength", "maxLength"}
+        if dataframe.schema[column_name] != pl.String:
+            filters = {k: v for k, v in filters.items() if k not in string_only}
+
         if "anyOf" in column_properties:
             checks = [
                 check(x[key])
