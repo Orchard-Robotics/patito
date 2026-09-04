@@ -1100,7 +1100,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         """
         mapping = {f"{prefix}{field_name}": field_name for field_name in cls.columns}
         return cls._derive_model(
-            model_name="Prefixed{cls.__name__}",
+            model_name=f"Prefixed{cls.__name__}",
             field_mapping=mapping,
         )
 
