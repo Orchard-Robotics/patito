@@ -733,7 +733,11 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
             ]
         ).set_model(self.model)  # type: ignore
 
-    def get(self, predicate: pl.Expr | None = None) -> ModelType:
+    def get(
+        self,
+        predicate: pl.Expr | None = None,
+        __base_model__: type[Model] | None = None,
+    ) -> ModelType:
         """Fetch the single row that matches the given polars predicate.
 
         If you expect a data frame to already consist of one single row,
@@ -749,6 +753,9 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
 
         Args:
             predicate: A polars expression defining the criteria of the filter.
+            __base_model__: Optional class the dynamically constructed model should
+                extend. Only relevant when no model has been associated with the
+                dataframe. default: patito Model
 
         Returns:
             Model: A pydantic-derived base model representing the given row.
@@ -813,7 +820,9 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
         if hasattr(self, "model"):
             return self.model.from_row(row)
         else:
-            return self._pydantic_model().from_row(row)  # type: ignore
+            return self._pydantic_model(  # type: ignore
+                __base_model__=__base_model__
+            ).from_row(row)
 
     def iter_models(
         self, validate_df: bool = True, validate_model: bool = False
@@ -878,8 +887,14 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
         )
         return ModelGenerator(_iter_models(df))
 
-    def _pydantic_model(self) -> type[Model]:
+    def _pydantic_model(
+        self, __base_model__: type[Model] | None = None
+    ) -> type[Model]:
         """Dynamically construct patito model compliant with dataframe.
+
+        Args:
+            __base_model__: Optional class the constructed model should extend
+                default: patito Model
 
         Returns:
             A pydantic model class where all the rows have been specified as
@@ -888,12 +903,15 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
         """
         from patito.pydantic import Model
 
+        if __base_model__ is None:
+            __base_model__ = Model
+
         pydantic_annotations = {column: (Any, ...) for column in self.columns}
         return cast(
             type[Model],
             create_model(  # type: ignore
                 "UntypedRow",
-                __base__=Model,
+                __base__=__base_model__,
                 **pydantic_annotations,  # pyright: ignore
             ),
         )

@@ -933,6 +933,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         cls: type[Model],
         other: type[Model],
         how: Literal["inner", "left", "outer", "asof", "cross", "semi", "anti"],
+        __base_model__: type[Model] | None = None,
     ) -> type[Model]:
         """Dynamically create a new model compatible with an SQL Join operation.
 
@@ -944,6 +945,8 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         Args:
             other: Another patito Model class.
             how: The type of SQL Join operation.
+            __base_model__: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             A new model type compatible with the resulting schema produced by the given
@@ -978,6 +981,9 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         if how in {"semi", "anti"}:
             return cls
 
+        if __base_model__ is None:
+            __base_model__ = Model
+
         kwargs: dict[str, Any] = {}
         for model, nullable_methods in (
             (cls, {"outer"}),
@@ -994,7 +1000,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return create_model(
             f"{cls.__name__}{how.capitalize()}Join{other.__name__}",
             **kwargs,
-            __base__=Model,
+            __base__=__base_model__,
         )
 
     @classmethod
