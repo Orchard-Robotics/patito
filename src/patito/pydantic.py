@@ -998,11 +998,17 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         )
 
     @classmethod
-    def select(cls: type[ModelType], fields: str | Iterable[str]) -> type[Model]:
+    def select(
+        cls: type[ModelType],
+        fields: str | Iterable[str],
+        base_model: type[Model] | None = None,
+    ) -> type[Model]:
         """Create a new model consisting of only a subset of the model fields.
 
         Args:
             fields: A single field name as a string or a collection of strings.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             A new model containing only the fields specified by ``fields``.
@@ -1036,16 +1042,24 @@ class Model(BaseModel, metaclass=ModelMetaclass):
 
         mapping = {field_name: field_name for field_name in fields}
         return cls._derive_model(
-            model_name=f"Selected{cls.__name__}", field_mapping=mapping
+            model_name=f"Selected{cls.__name__}",
+            field_mapping=mapping,
+            base_model=base_model,
         )
 
     @classmethod
-    def drop(cls: type[ModelType], name: str | Iterable[str]) -> type[Model]:
+    def drop(
+        cls: type[ModelType],
+        name: str | Iterable[str],
+        base_model: type[Model] | None = None,
+    ) -> type[Model]:
         """Return a new model where one or more fields are excluded.
 
         Args:
             name: A single string field name, or a list of such field names,
                 which will be dropped.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             New model class where the given fields have been removed.
@@ -1076,14 +1090,21 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return cls._derive_model(
             model_name=f"Dropped{cls.__name__}",
             field_mapping=mapping,
+            base_model=base_model,
         )
 
     @classmethod
-    def prefix(cls: type[ModelType], prefix: str) -> type[Model]:
+    def prefix(
+        cls: type[ModelType],
+        prefix: str,
+        base_model: type[Model] | None = None,
+    ) -> type[Model]:
         """Return a new model where all field names have been prefixed.
 
         Args:
             prefix: String prefix to add to all field names.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             New model class with all the same fields only prefixed with the given prefix.
@@ -1102,14 +1123,21 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return cls._derive_model(
             model_name=f"Prefixed{cls.__name__}",
             field_mapping=mapping,
+            base_model=base_model,
         )
 
     @classmethod
-    def suffix(cls: type[ModelType], suffix: str) -> type[Model]:
+    def suffix(
+        cls: type[ModelType],
+        suffix: str,
+        base_model: type[Model] | None = None,
+    ) -> type[Model]:
         """Return a new model where all field names have been suffixed.
 
         Args:
             suffix: String suffix to add to all field names.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             New model class with all the same fields only suffixed with the given
@@ -1127,17 +1155,24 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         """
         mapping = {f"{field_name}{suffix}": field_name for field_name in cls.columns}
         return cls._derive_model(
-            model_name="Suffixed{cls.__name__}",
+            model_name=f"Suffixed{cls.__name__}",
             field_mapping=mapping,
+            base_model=base_model,
         )
 
     @classmethod
-    def rename(cls: type[ModelType], mapping: dict[str, str]) -> type[Model]:
+    def rename(
+        cls: type[ModelType],
+        mapping: dict[str, str],
+        base_model: type[Model] | None = None,
+    ) -> type[Model]:
         """Return a new model class where the specified fields have been renamed.
 
         Args:
             mapping: A dictionary where the keys are the old field names
                 and the values are the new names.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             A new model class where the given fields have been renamed.
@@ -1169,16 +1204,20 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return cls._derive_model(
             model_name=f"Renamed{cls.__name__}",
             field_mapping=field_mapping,
+            base_model=base_model,
         )
 
     @classmethod
     def with_fields(
         cls: type[ModelType],
+        base_model: type[Model] | None = None,
         **field_definitions: Any,  # noqa: ANN401
     ) -> type[Model]:
         """Return a new model class where the given fields have been added.
 
         Args:
+            base_model: Optional class the derived model should extend
+                default: patito Model
             **field_definitions: the keywords are of the form:
                 ``field_name=(field_type, field_default)``.
                 Specify ``...`` if no default value is provided.
@@ -1205,6 +1244,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return cls._derive_model(
             model_name=f"Expanded{cls.__name__}",
             field_mapping=fields,
+            base_model=base_model,
         )
 
     @classmethod
@@ -1220,6 +1260,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         cls: type[ModelType],
         model_name: str,
         field_mapping: dict[str, Any],
+        base_model: type[Model] | None = None,
     ) -> type[Model]:
         """Derive a new model with new field definitions.
 
@@ -1230,11 +1271,16 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                 pointers to the original fields by name. Otherwise, specify field
                 definitions as (field_type, field_default) as accepted by
                 pydantic.create_model.
+            base_model: Optional class the derived model should extend
+                default: patito Model
 
         Returns:
             A new model class derived from the model type of self.
 
         """
+        if base_model is None:
+            base_model = Model
+
         new_fields = {}
         for new_field_name, field_definition in field_mapping.items():
             if isinstance(field_definition, str):
@@ -1253,7 +1299,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                 new_fields[new_field_name] = (field_type, field_definition[1])
         return create_model(  # type: ignore
             model_name,
-            __base__=Model,
+            __base__=base_model,
             **new_fields,
         )
 
