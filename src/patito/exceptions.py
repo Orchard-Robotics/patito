@@ -27,7 +27,11 @@ if TYPE_CHECKING:
     from patito._pydantic.repr import ReprArgs
 
 
-__all__ = "ErrorWrapper", "DataFrameValidationError"
+__all__ = "ErrorWrapper", "DataFrameValidationError", "UnvalidatedConstraintWarning"
+
+
+class UnvalidatedConstraintWarning(UserWarning):
+    """Warning for constraints which the requested validation mode cannot check."""
 
 
 class ErrorWrapper(Representation):

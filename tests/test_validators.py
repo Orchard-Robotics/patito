@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 import re
 import sys
+import warnings
 from datetime import date, datetime
 from typing import Literal, Optional, Union
 
@@ -21,6 +22,7 @@ from patito import DataFrameValidationError
 from patito._pydantic.column_info import ColumnInfo
 from patito._pydantic.dtypes import is_optional
 from patito._pydantic.dtypes.utils import unwrap_optional
+from patito.exceptions import UnvalidatedConstraintWarning
 from patito.validators import validate
 
 
@@ -1219,3 +1221,308 @@ def test_dtype_ser_deser():
         assert ci.dtype == expr
         ci_ser_deser = ColumnInfo.model_validate_json(ci.model_dump_json())
         assert ci_ser_deser.dtype == expr
+
+
+class _LazyModel(pt.Model):
+    """Model exercising both schema-level and content-level validation."""
+
+    product_id: int = pt.Field(unique=True)
+    temperature_zone: Literal["dry", "cold", "frozen"]
+    quantity: int = pt.Field(gt=0)
+
+
+def _spying_lazyframe(df: pl.DataFrame, reads: list[int]) -> pl.LazyFrame:
+    """Return a lazy frame recording the number of rows read from it."""
+
+    def spy(batch: pl.DataFrame) -> pl.DataFrame:
+        reads.append(batch.height)
+        return batch
+
+    return df.lazy().map_batches(
+        spy, schema=df.collect_schema(), validate_output_schema=False
+    )
+
+
+def test_lazyframe_validation() -> None:
+    """It should validate lazy frames, and hand them back as lazy frames."""
+    valid = pl.LazyFrame(
+        {
+            "product_id": [1, 2],
+            "temperature_zone": ["dry", "cold"],
+            "quantity": [10, 20],
+        }
+    )
+    validated = _LazyModel.validate(valid)
+    assert isinstance(validated, pl.LazyFrame)
+    pl_assert_frame_equal(validated.collect(), valid.collect())
+
+    invalid = valid.with_columns(temperature_zone=pl.lit("oven"))
+    with pytest.raises(DataFrameValidationError) as e_info:
+        _LazyModel.validate(invalid)
+    assert e_info.value.errors() == [
+        {
+            "loc": ("temperature_zone",),
+            "msg": "Rows with invalid values: {'oven'}.",
+            "type": "value_error.rowvalue",
+        }
+    ]
+
+
+def test_lazyframe_validation_is_never_collected() -> None:
+    """It should validate lazy frames without materializing them."""
+    df = pl.DataFrame(
+        {
+            "product_id": [1, 1],
+            "temperature_zone": ["dry", "oven"],
+            "quantity": [10, -1],
+        }
+    )
+
+    reads: list[int] = []
+    lf = _spying_lazyframe(df, reads)
+
+    # Nothing but the frame schema is needed in order to validate the schema
+    _LazyModel.validate(lf, schema_only=True)
+    assert reads == []
+
+    # The content checks do read the data, but only their aggregations are collected
+    with pytest.raises(DataFrameValidationError):
+        _LazyModel.validate(lf)
+    assert reads
+
+
+def test_lazyframe_schema_only_validation() -> None:
+    """Schema-only validation should ignore everything but columns and dtypes."""
+    df = pl.DataFrame(
+        {
+            "product_id": [1, 1],
+            "temperature_zone": ["dry", "oven"],
+            "quantity": [10, -1],
+        }
+    )
+    # Duplicated primary keys, an impermissible value and an out of bound value are
+    # all properties of the content, and are therefore not considered
+    _LazyModel.validate(df.lazy(), schema_only=True)
+
+    with pytest.raises(DataFrameValidationError) as e_info:
+        _LazyModel.validate(
+            df.drop("quantity").with_columns(product_id=pl.lit("1")).lazy(),
+            schema_only=True,
+        )
+    errors = sorted(e_info.value.errors(), key=lambda e: e["loc"])
+    assert [(error["loc"], error["msg"]) for error in errors] == [
+        (("product_id",), "Polars dtype String does not match model field type."),
+        (("quantity",), "Missing column"),
+    ]
+
+
+def test_lazyframe_validation_on_collect() -> None:
+    """It should be able to defer the content checks to the collection of the frame."""
+    valid = pl.LazyFrame(
+        {
+            "product_id": [1, 2],
+            "temperature_zone": ["dry", "cold"],
+            "quantity": [10, 20],
+        }
+    )
+    pl_assert_frame_equal(
+        _LazyModel.validate(valid, on_collect=True).collect(), valid.collect()
+    )
+
+    reads: list[int] = []
+    invalid = _spying_lazyframe(
+        pl.DataFrame(
+            {
+                "product_id": [1, 1],
+                "temperature_zone": ["dry", "oven"],
+                "quantity": [10, 20],
+            }
+        ),
+        reads,
+    )
+
+    # No data is read until the returned frame is collected
+    validated = _LazyModel.validate(invalid, on_collect=True)
+    assert reads == []
+
+    with pytest.raises(DataFrameValidationError) as e_info:
+        validated.collect()
+    assert sorted(e["loc"] for e in e_info.value.errors()) == [
+        ("product_id",),
+        ("temperature_zone",),
+    ]
+
+
+def test_lazyframe_validation_on_collect_of_a_filtered_frame() -> None:
+    """Deferred checks should survive the optimization of the surrounding query."""
+    lf = pl.LazyFrame(
+        {
+            "product_id": [1, 2],
+            "temperature_zone": ["dry", "oven"],
+            "quantity": [10, 20],
+        }
+    )
+    validated = _LazyModel.validate(lf, on_collect=True)
+
+    # The invalid row is filtered away, but validation still applies to the frame as
+    # it was validated, not as it is eventually consumed
+    with pytest.raises(DataFrameValidationError):
+        validated.filter(pl.col("product_id") == 1).select("quantity").collect()
+
+
+def test_lazy_and_eager_validation_agree() -> None:
+    """Lazy and eager validation should detect the exact same errors."""
+    df = pl.DataFrame(
+        {
+            "product_id": [1, 1],
+            "temperature_zone": ["dry", "oven"],
+            "quantity": [10, -1],
+            "superfluous": [None, None],
+        }
+    )
+
+    def errors_of(validation) -> str:
+        with pytest.raises(DataFrameValidationError) as e_info:
+            validation()
+        return str(e_info.value)
+
+    eager = errors_of(lambda: _LazyModel.validate(df))
+    lazy = errors_of(lambda: _LazyModel.validate(df.lazy()))
+    on_collect = errors_of(
+        lambda: _LazyModel.validate(df.lazy(), on_collect=True).collect()
+    )
+    assert eager == lazy == on_collect
+
+
+def test_contradictory_validation_arguments() -> None:
+    """It should reject argument combinations which cannot be honoured."""
+    lf = pl.LazyFrame({"product_id": [1], "temperature_zone": ["dry"], "quantity": [1]})
+
+    with pytest.raises(ValueError, match="both 'schema_only' and 'on_collect'"):
+        _LazyModel.validate(lf, schema_only=True, on_collect=True)
+
+    with pytest.raises(ValueError, match="'on_collect' requires a polars LazyFrame"):
+        _LazyModel.validate(lf.collect(), on_collect=True)
+
+
+def test_streaming_validation() -> None:
+    """It should check each batch of rows as it flows through the query."""
+    valid = pl.LazyFrame(
+        {
+            "product_id": [1, 2],
+            "temperature_zone": ["dry", "cold"],
+            "quantity": [10, 20],
+        }
+    )
+    with pytest.warns(UnvalidatedConstraintWarning):
+        validated = _LazyModel.validate(valid, streaming=True)
+
+    assert isinstance(validated, pl.LazyFrame)
+    for engine in ("in-memory", "streaming"):
+        pl_assert_frame_equal(validated.collect(engine=engine), valid.collect())
+
+    with pytest.warns(UnvalidatedConstraintWarning):
+        invalid = _LazyModel.validate(
+            valid.with_columns(quantity=pl.lit(-1)), streaming=True
+        )
+    for engine in ("in-memory", "streaming"):
+        with pytest.raises(DataFrameValidationError) as e_info:
+            invalid.collect(engine=engine)
+        assert [error["loc"] for error in e_info.value.errors()] == [("quantity",)]
+
+
+def test_streaming_validation_reads_nothing_until_collected() -> None:
+    """Streaming validation should not touch the data while being set up."""
+    reads: list[int] = []
+    lf = _spying_lazyframe(
+        pl.DataFrame(
+            {
+                "product_id": [1, 2],
+                "temperature_zone": ["dry", "oven"],
+                "quantity": [10, 20],
+            }
+        ),
+        reads,
+    )
+
+    with pytest.warns(UnvalidatedConstraintWarning):
+        validated = _LazyModel.validate(lf, streaming=True)
+    assert reads == []
+
+    with pytest.raises(DataFrameValidationError):
+        validated.collect()
+    assert reads
+
+
+def test_streaming_validation_skips_uniqueness() -> None:
+    """It should warn about, and skip, the checks it cannot perform per batch."""
+    duplicated = pl.LazyFrame(
+        {
+            "product_id": [1, 1],
+            "temperature_zone": ["dry", "cold"],
+            "quantity": [10, 20],
+        }
+    )
+
+    # Eagerly, the duplicated primary key is caught
+    with pytest.raises(DataFrameValidationError) as e_info:
+        _LazyModel.validate(duplicated)
+    assert [error["loc"] for error in e_info.value.errors()] == [("product_id",)]
+
+    # While streaming, it is explicitly reported as not being validated
+    with pytest.warns(UnvalidatedConstraintWarning, match="Uniqueness of product_id"):
+        validated = _LazyModel.validate(duplicated, streaming=True)
+    pl_assert_frame_equal(validated.collect(), duplicated.collect())
+
+
+def test_streaming_validation_without_unstreamable_checks() -> None:
+    """A model without uniqueness constraints should stream without warning."""
+
+    class Streamable(pt.Model):
+        temperature_zone: Literal["dry", "cold", "frozen"]
+        quantity: int = pt.Field(gt=0)
+
+    lf = pl.LazyFrame({"temperature_zone": ["dry"], "quantity": [1]})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Streamable.validate(lf, streaming=True).collect()
+
+
+def test_streaming_and_eager_validation_agree_on_streamable_checks() -> None:
+    """For a single batch, streaming should report exactly what eager validation does."""
+
+    class Streamable(pt.Model):
+        temperature_zone: Literal["dry", "cold", "frozen"]
+        quantity: int = pt.Field(gt=0)
+        name: str = pt.Field(min_length=3)
+
+    df = pl.DataFrame(
+        {
+            "temperature_zone": ["dry", "oven"],
+            "quantity": [10, -1],
+            "name": ["abc", "x"],
+        }
+    )
+
+    def errors_of(validation) -> str:
+        with pytest.raises(DataFrameValidationError) as e_info:
+            validation()
+        return str(e_info.value)
+
+    assert errors_of(lambda: Streamable.validate(df)) == errors_of(
+        lambda: Streamable.validate(df.lazy(), streaming=True).collect()
+    )
+
+
+def test_contradictory_streaming_arguments() -> None:
+    """Streaming should reject the argument combinations it cannot honour."""
+    lf = pl.LazyFrame({"product_id": [1], "temperature_zone": ["dry"], "quantity": [1]})
+
+    with pytest.raises(ValueError, match="both 'schema_only' and 'streaming'"):
+        _LazyModel.validate(lf, schema_only=True, streaming=True)
+
+    with pytest.raises(ValueError, match="both 'on_collect' and 'streaming'"):
+        _LazyModel.validate(lf, on_collect=True, streaming=True)
+
+    with pytest.raises(ValueError, match="'streaming' requires a polars LazyFrame"):
+        _LazyModel.validate(lf.collect(), streaming=True)

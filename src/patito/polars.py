@@ -334,6 +334,68 @@ class LazyFrame(pl.LazyFrame, Generic[ModelType]):
                 exprs.append(pl.col(column).cast(default_dtypes[column]))
         return self.with_columns(exprs)
 
+    def validate(
+        self: LDF, columns: Sequence[str] | None = None, **kwargs: Any
+    ) -> LDF:
+        """Validate the schema and content of the lazyframe.
+
+        You must invoke ``.set_model()`` before invoking ``.validate()`` in order
+        to specify how the lazyframe should be validated.
+
+        The lazyframe is never collected; only the aggregations needed to check its
+        content are. Pass ``schema_only=True`` to restrict validation to what the frame
+        schema alone can tell, or ``on_collect=True``/``streaming=True`` to defer the
+        content checks to the collection of the returned lazyframe. See
+        :ref:`Model.validate() <Model.validate>` for the full set of options.
+
+        Args:
+            columns: Optional list of columns to validate. If not provided, all columns
+                of the lazyframe will be validated.
+            **kwargs: Additional arguments passed to ``Model.validate``.
+
+        Returns:
+            LazyFrame[Model]: The validated lazyframe. Note that this is *not*
+            necessarily the same object as the one validated, since deferred checks are
+            carried by the returned lazyframe rather than by the original one.
+
+        Raises:
+            patito.exceptions.DataFrameValidationError: If the lazyframe does not match
+                the specified schema.
+
+            TypeError: If ``LazyFrame.set_model()`` has not been invoked prior to
+                validation. Note that ``patito.Model.LazyFrame`` automatically invokes
+                ``LazyFrame.set_model()`` for you.
+
+        Examples:
+            >>> import patito as pt
+
+            >>> class Product(pt.Model):
+            ...     product_id: int = pt.Field(unique=True)
+            ...     temperature_zone: Literal["dry", "cold", "frozen"]
+            ...
+
+            >>> lf = pt.LazyFrame(
+            ...     {"product_id": [1, 2], "temperature_zone": ["dry", "oven"]}
+            ... ).set_model(Product)
+            >>> try:
+            ...     lf.validate()
+            ... except pt.DataFrameValidationError as exc:
+            ...     print(exc)
+            ...
+            1 validation error for Product
+            temperature_zone
+              Rows with invalid values: {'oven'}. (type=value_error.rowvalue)
+
+        """
+        if not hasattr(self, "model"):
+            raise TypeError(
+                f"You must invoke {self.__class__.__name__}.set_model() "
+                f"before invoking {self.__class__.__name__}.validate()."
+            )
+        return cast(
+            LDF, self.model.validate(dataframe=self, columns=columns, **kwargs)
+        )
+
     @classmethod
     def from_existing(cls: type[LDF], lf: pl.LazyFrame) -> LDF:
         """Construct a patito.DataFrame object from an existing polars.DataFrame object."""

@@ -15,6 +15,7 @@ from typing import (
     TypeVar,
     cast,
     get_args,
+    overload,
 )
 from zoneinfo import ZoneInfo
 
@@ -442,32 +443,81 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         else:
             return cls.model_construct(**dataframe.to_dicts()[0])
 
+    @overload
+    @classmethod
+    def validate(
+        cls: type[ModelType],
+        dataframe: pl.LazyFrame,
+        columns: Sequence[str] | None = ...,
+        allow_missing_columns: bool = ...,
+        allow_superfluous_columns: bool = ...,
+        drop_superfluous_columns: bool = ...,
+        schema_only: bool = ...,
+        on_collect: bool = ...,
+        streaming: bool = ...,
+    ) -> LazyFrame[ModelType]: ...
+
+    @overload
     @classmethod
     def validate(
         cls: type[ModelType],
         dataframe: pd.DataFrame | pl.DataFrame,
+        columns: Sequence[str] | None = ...,
+        allow_missing_columns: bool = ...,
+        allow_superfluous_columns: bool = ...,
+        drop_superfluous_columns: bool = ...,
+        schema_only: bool = ...,
+        on_collect: bool = ...,
+        streaming: bool = ...,
+    ) -> DataFrame[ModelType]: ...
+
+    @classmethod
+    def validate(
+        cls: type[ModelType],
+        dataframe: pd.DataFrame | pl.DataFrame | pl.LazyFrame,
         columns: Sequence[str] | None = None,
         allow_missing_columns: bool = False,
         allow_superfluous_columns: bool = False,
         drop_superfluous_columns: bool = False,
-    ) -> DataFrame[ModelType]:
+        schema_only: bool = False,
+        on_collect: bool = False,
+        streaming: bool = False,
+    ) -> DataFrame[ModelType] | LazyFrame[ModelType]:
         """Validate the schema and content of the given dataframe.
 
+        A LazyFrame is validated without ever being collected; only the aggregations
+        required to check its content are evaluated.
+
         Args:
-            dataframe: Polars DataFrame to be validated.
+            dataframe: Polars DataFrame or LazyFrame to be validated.
             columns: Optional list of columns to validate. If not provided, all columns
                 of the dataframe will be validated.
             allow_missing_columns: If True, missing columns will not be considered an error.
             allow_superfluous_columns: If True, additional columns will not be considered an error.
             drop_superfluous_columns: If True, columns not present in the model will be
                 dropped from the resulting dataframe.
+            schema_only: If True, only validate what can be determined from the schema
+                of the frame, namely the presence and dtypes of its columns. The content
+                of the frame is never read, making validation free for a lazy frame.
+            on_collect: If True, attach the content checks to the returned lazy frame
+                rather than performing them right away, so that any violation is raised
+                when that frame is collected. Requires a LazyFrame.
+            streaming: If True, attach the content checks to the returned lazy frame
+                batch by batch, so that each batch is checked as it flows through the
+                query and the first invalid one raises. Validation then costs no
+                additional pass over the data and holds no more than a batch in memory,
+                but the uniqueness checks have to be dropped, as a duplicate may be
+                spread across any two batches. Requires a LazyFrame.
 
         Returns:
-            DataFrame: A patito DataFrame containing the validated data.
+            DataFrame: A patito DataFrame containing the validated data, or a patito
+            LazyFrame if a LazyFrame was given.
 
         Raises:
             patito.exceptions.DataFrameValidationError: If the given dataframe does not match
-                the given schema.
+                the given schema. If ``on_collect`` or ``streaming`` is set, this is
+                instead raised when the returned lazy frame is collected.
+            ValueError: If the given combination of arguments is contradictory.
 
         Examples:
             >>> import patito as pt
@@ -498,16 +548,58 @@ class Model(BaseModel, metaclass=ModelMetaclass):
             temperature_zone
               Rows with invalid values: {'oven'}. (type=value_error.rowvalue)
 
+            A lazy frame is validated in place, and handed back as a lazy frame:
+
+            >>> lf = pl.LazyFrame(
+            ...     {
+            ...         "product_id": [1, 2],
+            ...         "temperature_zone": ["dry", "cold"],
+            ...         "is_for_sale": [True, False],
+            ...     }
+            ... )
+            >>> Product.validate(lf).collect()
+            shape: (2, 3)
+            ┌────────────┬──────────────────┬─────────────┐
+            │ product_id ┆ temperature_zone ┆ is_for_sale │
+            │ ---        ┆ ---              ┆ ---         │
+            │ i64        ┆ str              ┆ bool        │
+            ╞════════════╪══════════════════╪═════════════╡
+            │ 1          ┆ dry              ┆ true        │
+            │ 2          ┆ cold             ┆ false       │
+            └────────────┴──────────────────┴─────────────┘
+
+            With ``on_collect``, the checks become part of the query plan instead, so
+            that the data is read once, when the caller collects it:
+
+            >>> validated = Product.validate(
+            ...     lf.with_columns(temperature_zone=pl.lit("oven")), on_collect=True
+            ... )
+            >>> try:
+            ...     validated.collect()
+            ... except pt.DataFrameValidationError as exc:
+            ...     print(exc)
+            ...
+            1 validation error for Product
+            temperature_zone
+              Rows with invalid values: {'oven'}. (type=value_error.rowvalue)
+
         """
-        validated_df = validate(
+        validated = validate(
             dataframe=dataframe,
             schema=cls,
             columns=columns,
             allow_missing_columns=allow_missing_columns,
             allow_superfluous_columns=allow_superfluous_columns,
             drop_superfluous_columns=drop_superfluous_columns,
+            schema_only=schema_only,
+            on_collect=on_collect,
+            streaming=streaming,
         )
-        return cls.DataFrame(validated_df)
+        if isinstance(validated, pl.LazyFrame):
+            return cast(
+                LazyFrame[ModelType], cls.LazyFrame._from_pyldf(validated._ldf)
+            )
+        return cls.DataFrame(validated)
 
     @classmethod
     def iter_models(

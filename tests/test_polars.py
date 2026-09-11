@@ -606,6 +606,62 @@ def test_validation_returns_df() -> None:
     assert df.validate().equals(df)
 
 
+def test_lazyframe_validation_returns_lazyframe() -> None:
+    """Ensure LazyFrame.validate() returns a LazyFrame carrying the model."""
+
+    class Model(pt.Model):
+        a: int
+
+    lf = Model.LazyFrame({"a": [1, 2]})
+    validated = lf.validate()
+    assert isinstance(validated, pt.LazyFrame)
+    assert validated.model is Model
+    assert validated.collect().equals(lf.collect())
+
+    # The model survives the round trip, so the collected frame is a patito one too
+    assert isinstance(validated.collect(), pt.DataFrame)
+
+
+def test_lazyframe_validation_catches_errors() -> None:
+    """Ensure LazyFrame.validate() raises on invalid data."""
+
+    class Model(pt.Model):
+        a: int
+        b: str
+
+    with pytest.raises(pt.exceptions.DataFrameValidationError) as e_info:
+        Model.LazyFrame({"a": ["not an int"]}).validate()
+    assert sorted(error["loc"] for error in e_info.value.errors()) == [("a",), ("b",)]
+
+
+def test_lazyframe_validation_forwards_keyword_arguments() -> None:
+    """Ensure LazyFrame.validate() forwards its keyword arguments to the model."""
+
+    class Model(pt.Model):
+        a: int
+        b: str
+
+    lf = Model.LazyFrame({"a": [1, 2]})
+
+    # A missing column is an error by default, but can be allowed
+    with pytest.raises(pt.exceptions.DataFrameValidationError):
+        lf.validate()
+    lf.validate(allow_missing_columns=True)
+
+    # Deferred validation hands back a frame which raises upon collection
+    deferred = Model.LazyFrame({"a": [1], "b": [2]}).validate(
+        allow_missing_columns=True, on_collect=True
+    )
+    with pytest.raises(pt.exceptions.DataFrameValidationError):
+        deferred.collect()
+
+
+def test_lazyframe_validation_without_model() -> None:
+    """Ensure LazyFrame.validate() requires a model to have been set."""
+    with pytest.raises(TypeError, match="You must invoke LazyFrame.set_model()"):
+        pt.LazyFrame({"a": [1]}).validate()
+
+
 def test_alias_generator_read_csv() -> None:
     """Ensure validation alias is applied to read_csv."""
 
