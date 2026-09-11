@@ -234,7 +234,7 @@ class ModelMetaclass(PydanticModelMetaclass):
         )
 
     @property
-    def primary_key_columns(cls: type[Model]) -> list[str]:
+    def primary_key_columns(cls) -> list[str]:
         """Return the names of the columns that are part of the primary key.
 
         Returns:
@@ -306,7 +306,7 @@ class ModelMetaclass(PydanticModelMetaclass):
         }
 
     @property
-    def aliases(cls: type[Model]) -> dict[str, str]:
+    def aliases(cls) -> dict[str, str]:
         """Return dictionnay of the column aliases."""
         return {
             alias: field
