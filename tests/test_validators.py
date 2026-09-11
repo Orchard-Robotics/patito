@@ -23,7 +23,7 @@ from patito._pydantic.column_info import ColumnInfo
 from patito._pydantic.dtypes import is_optional
 from patito._pydantic.dtypes.utils import unwrap_optional
 from patito.exceptions import UnvalidatedConstraintWarning
-from patito.validators import validate
+from patito.validators import _Checks, validate
 
 
 def test_is_optional() -> None:
@@ -1526,3 +1526,17 @@ def test_contradictory_streaming_arguments() -> None:
 
     with pytest.raises(ValueError, match="'streaming' requires a polars LazyFrame"):
         _LazyModel.validate(lf.collect(), streaming=True)
+
+
+def test_checks_must_aggregate_to_a_single_row() -> None:
+    """A check which neglects to aggregate should be caught rather than misread."""
+    lf = pl.LazyFrame({"a": [1, 2, 3]})
+
+    aggregating = _Checks()
+    aggregating.defer(lf, pl.col("a").sum(), lambda value: None)
+    assert aggregating.resolve() == []
+
+    not_aggregating = _Checks()
+    not_aggregating.defer(lf, pl.col("a"), lambda value: None)
+    with pytest.raises(AssertionError, match="must aggregate to exactly one row"):
+        not_aggregating.resolve()

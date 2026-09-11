@@ -42,7 +42,31 @@ except ImportError:
     _PANDAS_AVAILABLE = False
 
 if TYPE_CHECKING:
+    from polars._typing import ConcatMethod
+
     from patito import Model
+
+
+def _horizontal_concat_method() -> str:
+    """Return the name of the concat method which lines up one-row frames side by side.
+
+    Polars 1.42.1 deprecated the padding behaviour of ``how="horizontal"`` in favour of
+    an explicit ``how="horizontal_extend"``, reserving ``"horizontal"`` for a future
+    variant which will demand equal heights. Every frame combined here is a single-row
+    aggregation, so the two spellings behave identically; the explicit one is used
+    wherever it exists in order to keep the deprecation warning quiet.
+    """
+    try:
+        from polars._typing import ConcatMethod as _ConcatMethod
+    except ImportError:  # pragma: no cover - a private module, which may yet move
+        return "horizontal"
+
+    if "horizontal_extend" in get_args(_ConcatMethod):
+        return "horizontal_extend"
+    return "horizontal"
+
+
+_HORIZONTAL_CONCAT = _horizontal_concat_method()
 
 
 VALID_POLARS_TYPES = {
@@ -208,7 +232,23 @@ class _Checks:
         ]
         if len(selections) == 1:
             return selections[0]
-        return pl.concat(selections, how="horizontal")
+        return pl.concat(selections, how=cast("ConcatMethod", _HORIZONTAL_CONCAT))
+
+    @staticmethod
+    def _values(aggregations: pl.DataFrame) -> Mapping[str, Any]:
+        """Extract the single row of aggregated values.
+
+        Every registered check aggregates its frame down to exactly one row, which is
+        what allows the results of checks over different frames to be lined up side by
+        side. A check which neglected to aggregate would instead be padded out with
+        nulls and silently misread from its first row, so the invariant is pinned down
+        here rather than left to the concatenation to honour.
+        """
+        assert aggregations.height == 1, (
+            "Validation checks must aggregate to exactly one row, but "
+            f"{', '.join(aggregations.columns)} produced {aggregations.height}"
+        )
+        return aggregations.row(0, named=True)
 
     def _errors(self, values: Mapping[str, Any]) -> list[ErrorWrapper]:
         """Assemble the errors, in registration order, from the aggregated values."""
@@ -228,7 +268,7 @@ class _Checks:
         aggregations = self._aggregations()
         if aggregations is None:
             return self._errors({})
-        return self._errors(aggregations.collect().row(0, named=True))
+        return self._errors(self._values(aggregations.collect()))
 
     def attach(self, frame: pl.LazyFrame, schema: type[Model]) -> pl.LazyFrame:
         """Attach the checks to the given frame, to be resolved when it is collected.
@@ -253,7 +293,7 @@ class _Checks:
         frame_schema = frame.collect_schema()
 
         def _validate(aggregations: pl.DataFrame) -> pl.DataFrame:
-            errors = self._errors(aggregations.row(0, named=True))
+            errors = self._errors(self._values(aggregations))
             if errors:
                 raise DataFrameValidationError(errors=errors, model=schema)
             return pl.DataFrame(schema=frame_schema)
