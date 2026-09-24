@@ -8,3 +8,4 @@ API Reference
    patito/DataFrame/index
    patito/Model/index
    patito/Field/index
+   patito/attach_column_info/index

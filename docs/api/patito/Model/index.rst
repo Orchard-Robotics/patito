@@ -12,6 +12,7 @@ patito.Model
    :maxdepth: 1
 
    DataFrame <DataFrame>
+   attach_frames <attach_frames>
    LazyFrame <LazyFrame>
    columns <columns>
    defaults <defaults>
