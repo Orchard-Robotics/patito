@@ -759,3 +759,92 @@ def test_attach_frames_overridden_by_metaclass_subclass() -> None:
     assert Product.DataFrame(
         {"product_id": [2, 1]}
     ).sorted_by_id().to_series().to_list() == [1, 2]
+
+
+def test_attach_column_info_annotates_a_field_built_elsewhere() -> None:
+    """Column information can be put on a field patito did not construct."""
+    import pydantic
+
+    class Product(pt.Model):
+        product_id: int = pt.attach_column_info(
+            pydantic.Field(gt=0), dtype=pl.UInt32, unique=True
+        )
+
+    assert Product.dtypes == {"product_id": pl.UInt32}
+    assert Product.unique_columns == {"product_id"}
+    assert Product.column_infos["product_id"].primary_key is False
+    # Whatever the other library put on the field is untouched.
+    (constraint,) = Product.model_fields["product_id"].metadata
+    assert constraint.gt == 0
+
+
+def test_attach_column_info_returns_the_same_object() -> None:
+    """So it can be used inline in a model definition."""
+    import pydantic
+
+    field = pydantic.Field(default=3)
+    assert pt.attach_column_info(field, dtype=pl.Int8) is field
+
+
+def test_attach_column_info_merges_over_what_is_already_there() -> None:
+    """Safe to call on a field which already came from ``Field``."""
+    field = pt.Field(dtype=pl.Float32, unique=True)
+    pt.attach_column_info(field, primary_key=True)
+
+    class Product(pt.Model):
+        price: float = field
+
+    assert Product.dtypes == {"price": pl.Float32}, "kept"
+    assert Product.unique_columns == {"price"}, "kept"
+    assert Product.column_infos["price"].primary_key is True, "added"
+
+
+def test_attach_column_info_overrides_rather_than_duplicates() -> None:
+    field = pt.Field(dtype=pl.Float32)
+    pt.attach_column_info(field, dtype=pl.Float64)
+
+    class Product(pt.Model):
+        price: float = field
+
+    assert Product.dtypes == {"price": pl.Float64}
+
+
+def test_attach_column_info_survives_model_build() -> None:
+    """The one that notices if pydantic stops reading ``_attributes_set``.
+
+    ``FieldInfo`` records the arguments it was constructed with, and the merge
+    which happens when a model class is built takes ``json_schema_extra`` from
+    that record rather than from the attribute. Setting only the attribute is
+    accepted in silence and then dropped, so this asserts the information is
+    still there *after* a class has been built around it.
+    """
+    import pydantic
+
+    field = pydantic.Field()
+    pt.attach_column_info(field, dtype=pl.UInt32)
+
+    class Product(pt.Model):
+        product_id: int = field
+
+    schema = Product.model_json_schema()["properties"]["product_id"]
+    assert "column_info" in schema, "it reached the generated schema"
+    assert Product.dtypes == {"product_id": pl.UInt32}, "and was read back"
+
+
+def test_attach_column_info_refuses_a_callable_json_schema_extra() -> None:
+    """There would be nowhere to put the column information."""
+    import pydantic
+
+    with pytest.raises(ValueError, match="cannot be given as a callable"):
+        pt.attach_column_info(
+            pydantic.Field(json_schema_extra=lambda schema: None), dtype=pl.Int8
+        )
+
+
+def test_field_and_attach_column_info_agree() -> None:
+    """Two ways in, one representation — they must not drift apart."""
+    import pydantic
+
+    built = pt.Field(dtype=pl.UInt32, unique=True)
+    attached = pt.attach_column_info(pydantic.Field(), dtype=pl.UInt32, unique=True)
+    assert built.json_schema_extra == attached.json_schema_extra

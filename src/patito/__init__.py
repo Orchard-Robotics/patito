@@ -5,7 +5,7 @@ from polars import Expr, Series, col
 from patito import exceptions
 from patito.exceptions import DataFrameValidationError
 from patito.polars import DataFrame, LazyFrame
-from patito.pydantic import Field, Model
+from patito.pydantic import Field, Model, attach_column_info
 
 _CACHING_AVAILABLE = False
 field = col("_")
@@ -18,6 +18,7 @@ __all__ = [
     "Model",
     "Series",
     "_CACHING_AVAILABLE",
+    "attach_column_info",
     "col",
     "exceptions",
     "field",

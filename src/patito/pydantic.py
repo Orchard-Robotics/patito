@@ -54,10 +54,12 @@ if TYPE_CHECKING:
     import patito.polars
 
 __all__ = [
+    "ColumnInfo",
     "Field",
     "Model",
     "ModelMetaclass",
     "ModelType",
+    "attach_column_info",
 ]
 
 # The generic type of a single row in given Relation.
@@ -1591,12 +1593,87 @@ def Field(
                 raise ValueError(
                     f"unexpected kwarg {kwarg}={kwargs[kwarg]}.  Add modern_kwargs_only=False to ignore"
                 )
-    ci_json = ci.model_dump_json()
-    existing_json_schema_extra = kwargs.pop("json_schema_extra", {})
-    merged_json_schema_extra = {**existing_json_schema_extra, "column_info": ci_json}
-
     return fields.Field(
         *args,
-        json_schema_extra=merged_json_schema_extra,
+        json_schema_extra=_merge_column_info(kwargs.pop("json_schema_extra", None), ci),
         **kwargs,
     )
+
+
+def _merge_column_info(
+    json_schema_extra: Any, column_info: ColumnInfo
+) -> dict[str, Any]:
+    """Put ``column_info`` into a ``json_schema_extra`` mapping.
+
+    The one place which knows where patito keeps column information on a field,
+    so that :func:`Field` and :func:`attach_column_info` cannot drift apart
+    about it.
+    """
+    if callable(json_schema_extra):
+        raise ValueError(
+            "patito stores column information in json_schema_extra, so it "
+            "cannot be given as a callable."
+        )
+    return {**(json_schema_extra or {}), "column_info": column_info.model_dump_json()}
+
+
+def attach_column_info(field: fields.FieldInfo, **kwargs: Any) -> fields.FieldInfo:
+    """Attach patito column information to an already constructed field.
+
+    :func:`Field` constructs the field itself, which is what you want when patito
+    is the only library involved. Some libraries need to construct their own
+    fields — because they subclass :class:`~pydantic.fields.FieldInfo`, or read
+    arguments patito knows nothing about — and a field built that way has
+    nowhere to put a dtype or a uniqueness constraint. This puts it there.
+
+    The field is modified in place and returned, so it can be used inline in a
+    model definition. Column information already on the field is kept, with the
+    given arguments merged over it, which makes it safe to call on a field which
+    came from :func:`Field`.
+
+    Args:
+        field: The field to annotate, from ``pydantic.Field`` or any library
+            which builds on it.
+        kwargs: The same column arguments :func:`Field` accepts — ``dtype``,
+            ``unique``, ``constraints``, ``derived_from``, ``allow_missing``,
+            ``primary_key``.
+
+    Return:
+        `FieldInfo <https://docs.pydantic.dev/latest/api/fields/#pydantic.fields.FieldInfo>`_:
+            The same object which was passed in.
+
+    Examples:
+        >>> import patito as pt
+        >>> import polars as pl
+        >>> import pydantic
+        >>> class Product(pt.Model):
+        ...     product_id: int = pt.attach_column_info(
+        ...         pydantic.Field(gt=0), dtype=pl.UInt32, unique=True
+        ...     )
+        ...
+        >>> Product.dtypes
+        {'product_id': UInt32}
+        >>> Product.unique_columns
+        {'product_id'}
+    """
+    existing = field.json_schema_extra
+    held = None
+    if isinstance(existing, dict) and "column_info" in existing:
+        held = ColumnInfo.model_validate_json(str(existing["column_info"]))
+    merged = (
+        ColumnInfo(**{**held.model_dump(exclude_unset=True), **kwargs})
+        if held is not None
+        else ColumnInfo(**kwargs)
+    )
+    extra = _merge_column_info(existing, merged)
+    field.json_schema_extra = extra
+    # And where pydantic actually reads it from. ``FieldInfo`` records the
+    # arguments it was constructed with, and the merge which happens when a
+    # model class is built takes ``json_schema_extra`` from that record rather
+    # than from the attribute — so setting the attribute alone is accepted in
+    # silence and then dropped. ``test_attach_column_info_survives_model_build``
+    # is what notices if that ever stops being true.
+    attributes_set = getattr(field, "_attributes_set", None)
+    if isinstance(attributes_set, dict):
+        attributes_set["json_schema_extra"] = extra
+    return field
