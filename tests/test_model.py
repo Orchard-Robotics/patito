@@ -26,6 +26,7 @@ from patito._pydantic.dtypes.utils import (
     DATE_DTYPES,
     TIME_DTYPES,
 )
+from patito.pydantic import ModelMetaclass
 from tests.examples import CompleteModel, ManyTypes, SmallModel, VerySmallModel
 
 
@@ -658,3 +659,103 @@ def test_aliases() -> None:
         power: int
 
     assert Bids.aliases == {"Offer-ID": "offer_id", "Country-EIC": "country_eic"}
+
+
+def test_attach_frames_is_invoked_for_every_model() -> None:
+    """Every model should get model-aware frame classes attached automatically."""
+
+    class Product(pt.Model):
+        product_id: int
+
+    assert Product.DataFrame.__name__ == "ProductDataFrame"
+    assert Product.LazyFrame.__name__ == "ProductLazyFrame"
+    assert Product.DataFrame.model is Product
+    assert Product.LazyFrame.model is Product
+    assert issubclass(Product.DataFrame, pt.DataFrame)
+    assert issubclass(Product.LazyFrame, pt.LazyFrame)
+
+
+def test_attach_frames_with_custom_frame_classes() -> None:
+    """It should be possible to attach dataframe classes of one's own."""
+
+    class SortedDataFrame(pt.DataFrame):
+        def sorted_by_id(self):
+            return self.sort("product_id")
+
+    class NotedLazyFrame(pt.LazyFrame):
+        def note(self) -> str:
+            return "noted"
+
+    class Product(pt.Model):
+        product_id: int
+
+    Product.attach_frames(
+        dataframe_class=SortedDataFrame, lazyframe_class=NotedLazyFrame
+    )
+
+    assert issubclass(Product.DataFrame, SortedDataFrame)
+    assert issubclass(Product.LazyFrame, NotedLazyFrame)
+
+    # The model stays wired up, so the patito functionality still works
+    assert Product.DataFrame.model is Product
+    assert Product.DataFrame(
+        {"product_id": [2, 1]}
+    ).sorted_by_id().to_series().to_list() == [1, 2]
+    assert Product.LazyFrame({"product_id": [1]}).note() == "noted"
+    assert isinstance(
+        Product.validate(pl.DataFrame({"product_id": [1]})), SortedDataFrame
+    )
+
+
+def test_attach_frames_replaces_both_classes() -> None:
+    """A class which is not given should fall back to the patito default."""
+
+    class SortedDataFrame(pt.DataFrame):
+        pass
+
+    class Product(pt.Model):
+        product_id: int
+
+    Product.attach_frames(dataframe_class=SortedDataFrame)
+    assert issubclass(Product.DataFrame, SortedDataFrame)
+
+    # Attaching only a lazyframe resets the dataframe back to the patito default
+    Product.attach_frames(lazyframe_class=pt.LazyFrame)
+    assert not issubclass(Product.DataFrame, SortedDataFrame)
+    assert issubclass(Product.DataFrame, pt.DataFrame)
+
+
+def test_attach_frames_rejects_foreign_frame_classes() -> None:
+    """It should refuse classes which are not model-aware patito frames."""
+
+    class Product(pt.Model):
+        product_id: int
+
+    with pytest.raises(TypeError, match="must be a subclass of patito.DataFrame"):
+        Product.attach_frames(dataframe_class=pl.DataFrame)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="must be a subclass of patito.LazyFrame"):
+        Product.attach_frames(lazyframe_class=pl.LazyFrame)  # type: ignore[arg-type]
+
+
+def test_attach_frames_overridden_by_metaclass_subclass() -> None:
+    """A metaclass subclass should be able to change what its models get attached."""
+
+    class SortedDataFrame(pt.DataFrame):
+        def sorted_by_id(self):
+            return self.sort("product_id")
+
+    class SortedModelMetaclass(ModelMetaclass):
+        def attach_frames(
+            cls, dataframe_class=SortedDataFrame, lazyframe_class=pt.LazyFrame
+        ):
+            super().attach_frames(dataframe_class, lazyframe_class)
+
+    class Product(pt.Model, metaclass=SortedModelMetaclass):
+        product_id: int
+
+    # Attached during class construction, without any manual invocation
+    assert issubclass(Product.DataFrame, SortedDataFrame)
+    assert Product.DataFrame(
+        {"product_id": [2, 1]}
+    ).sorted_by_id().to_series().to_list() == [1, 2]

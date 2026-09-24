@@ -78,19 +78,83 @@ class ModelMetaclass(PydanticModelMetaclass):
 
         """
         super().__init__(name, bases, clsdict, **kwargs)
-        NewDataFrame = type(
-            f"{cls.__name__}DataFrame",
-            (DataFrame,),
-            {"model": cls},
-        )
-        cls.DataFrame: type[DataFrame[cls]] = NewDataFrame  # type: ignore
+        cls.attach_frames()
 
-        NewLazyFrame = type(
-            f"{cls.__name__}LazyFrame",
-            (LazyFrame,),
+    def attach_frames(
+        cls,
+        dataframe_class: type[DataFrame] = DataFrame,
+        lazyframe_class: type[LazyFrame] = LazyFrame,
+    ) -> None:
+        """Attach model-aware dataframe classes to the model.
+
+        Invoked for every patito model as it is constructed, which is what makes
+        ``Model.DataFrame`` and ``Model.LazyFrame`` available. It can be invoked again
+        in order to attach dataframe classes of your own, and overridden by metaclass
+        subclasses in order to change what every one of their models gets attached.
+
+        Both classes are attached on every invocation, so a class which is not given
+        falls back to the patito default rather than to whatever happened to be
+        attached before. Pass both in order to customize both.
+
+        Args:
+            dataframe_class: The patito dataframe class which ``cls.DataFrame`` should
+                subclass. Defaults to ``patito.DataFrame``.
+            lazyframe_class: The patito lazyframe class which ``cls.LazyFrame`` should
+                subclass. Defaults to ``patito.LazyFrame``.
+
+        Raises:
+            TypeError: If the given classes do not subclass the patito dataframe
+                classes, as the attached classes must be model-aware.
+
+        Example:
+            Dataframes of your own can be attached to a model, extending the ones
+            patito hands out with whatever else the model calls for:
+
+            >>> import patito as pt
+
+            >>> class SortedDataFrame(pt.DataFrame):
+            ...     def sorted_by_id(self):
+            ...         return self.sort("product_id")
+            ...
+
+            >>> class Product(pt.Model):
+            ...     product_id: int
+            ...
+
+            >>> Product.attach_frames(dataframe_class=SortedDataFrame)
+            >>> Product.DataFrame({"product_id": [2, 1]}).sorted_by_id()
+            shape: (2, 1)
+            ┌────────────┐
+            │ product_id │
+            │ ---        │
+            │ i64        │
+            ╞════════════╡
+            │ 1          │
+            │ 2          │
+            └────────────┘
+
+        """
+        if not issubclass(dataframe_class, DataFrame):
+            raise TypeError(
+                f"{dataframe_class.__name__} must be a subclass of patito.DataFrame "
+                "in order to be attached to a model."
+            )
+        if not issubclass(lazyframe_class, LazyFrame):
+            raise TypeError(
+                f"{lazyframe_class.__name__} must be a subclass of patito.LazyFrame "
+                "in order to be attached to a model."
+            )
+
+        cls.DataFrame: type[DataFrame[cls]] = type(  # type: ignore
+            f"{cls.__name__}DataFrame",
+            (dataframe_class,),
             {"model": cls},
         )
-        cls.LazyFrame: type[LazyFrame[cls]] = NewLazyFrame  # type: ignore
+        cls.LazyFrame: type[LazyFrame[cls]] = type(  # type: ignore
+            f"{cls.__name__}LazyFrame",
+            (lazyframe_class,),
+            {"model": cls},
+        )
 
     def __hash__(self) -> int:
         """Return hash of the model class."""
@@ -596,9 +660,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
             streaming=streaming,
         )
         if isinstance(validated, pl.LazyFrame):
-            return cast(
-                LazyFrame[ModelType], cls.LazyFrame._from_pyldf(validated._ldf)
-            )
+            return cast(LazyFrame[ModelType], cls.LazyFrame._from_pyldf(validated._ldf))
         return cls.DataFrame(validated)
 
     @classmethod
