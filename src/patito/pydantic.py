@@ -53,6 +53,13 @@ except ImportError:
 if TYPE_CHECKING:
     import patito.polars
 
+__all__ = [
+    "Field",
+    "Model",
+    "ModelMetaclass",
+    "ModelType",
+]
+
 # The generic type of a single row in given Relation.
 # Should be a typed subclass of Model.
 ModelType = TypeVar("ModelType", bound="Model")
