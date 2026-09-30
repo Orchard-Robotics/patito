@@ -1,5 +1,5 @@
 [project]
-name = "patito"
+name = "orchard-patito"
 version = "0.9.1"
 description = "A dataframe modelling library built on top of polars and pydantic."
 authors = [
@@ -62,6 +62,9 @@ default-groups = [
     "dev",
     "docs",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/patito"]
 
 [build-system]
 requires = ["hatchling"]

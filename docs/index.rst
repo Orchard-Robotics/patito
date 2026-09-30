@@ -26,7 +26,7 @@ You can simply install Patito with :code:`pip` like so:
 
 .. code-block:: console
 
-   pip install patito
+   pip install orchard-patito
 
 Developer Notes
 ---------------

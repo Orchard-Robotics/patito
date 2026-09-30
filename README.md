@@ -14,10 +14,10 @@
     <a href="https://codecov.io/gh/kolonialno/patito">
         <img src="https://codecov.io/gh/kolonialno/patito/branch/main/graph/badge.svg?token=720LBDYH25"/>
     </a>
-    <a href="https://pypi.python.org/pypi/patito">
-        <img src="https://img.shields.io/pypi/v/patito.svg">
+    <a href="https://pypi.python.org/pypi/orchard-patito">
+        <img src="https://img.shields.io/pypi/v/orchard-patito.svg">
     </a>
-    <img src="https://img.shields.io/pypi/pyversions/patito">
+    <img src="https://img.shields.io/pypi/pyversions/orchard-patito">
     <a href="https://github.com/kolonialno/patito/blob/master/LICENSE">
         <img src="https://img.shields.io/github/license/kolonialno/patito.svg">
     </a>
@@ -36,7 +36,7 @@ Patito has first-class support for [polars]("https://github.com/pola-rs/polars")
 ## Installation
 
 ```sh
-pip install patito
+pip install orchard-patito
 ```
 
 ## Documentation
