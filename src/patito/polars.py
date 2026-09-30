@@ -334,9 +334,7 @@ class LazyFrame(pl.LazyFrame, Generic[ModelType]):
                 exprs.append(pl.col(column).cast(default_dtypes[column]))
         return self.with_columns(exprs)
 
-    def validate(
-        self: LDF, columns: Sequence[str] | None = None, **kwargs: Any
-    ) -> LDF:
+    def validate(self: LDF, columns: Sequence[str] | None = None, **kwargs: Any) -> LDF:
         """Validate the schema and content of the lazyframe.
 
         You must invoke ``.set_model()`` before invoking ``.validate()`` in order
@@ -392,9 +390,7 @@ class LazyFrame(pl.LazyFrame, Generic[ModelType]):
                 f"You must invoke {self.__class__.__name__}.set_model() "
                 f"before invoking {self.__class__.__name__}.validate()."
             )
-        return cast(
-            LDF, self.model.validate(dataframe=self, columns=columns, **kwargs)
-        )
+        return cast(LDF, self.model.validate(dataframe=self, columns=columns, **kwargs))
 
     @classmethod
     def from_existing(cls: type[LDF], lf: pl.LazyFrame) -> LDF:
@@ -949,9 +945,7 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
         )
         return ModelGenerator(_iter_models(df))
 
-    def _pydantic_model(
-        self, __base_model__: type[Model] | None = None
-    ) -> type[Model]:
+    def _pydantic_model(self, __base_model__: type[Model] | None = None) -> type[Model]:
         """Dynamically construct patito model compliant with dataframe.
 
         Args:

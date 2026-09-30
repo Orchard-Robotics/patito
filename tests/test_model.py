@@ -800,6 +800,7 @@ def test_attach_column_info_merges_over_what_is_already_there() -> None:
 
 
 def test_attach_column_info_overrides_rather_than_duplicates() -> None:
+    """A second value for the same key replaces the first one."""
     field = pt.Field(dtype=pl.Float32)
     pt.attach_column_info(field, dtype=pl.Float64)
 
