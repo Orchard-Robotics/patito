@@ -1,6 +1,6 @@
 [project]
 name = "orchard-patito"
-version = "0.9.1"
+version = "0.9.2"
 description = "A dataframe modelling library built on top of polars and pydantic."
 authors = [
     { name = "Jakob Gerhard Martinussen", email = "jakobgm@gmail.com" },
