@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # pyright: reportPrivateImportUsage=false
 import enum
+import json
 import re
 from datetime import date, datetime, time
 from typing import Optional
@@ -560,6 +561,51 @@ def test_column_infos() -> None:
     assert infos["c"].derived_from is not None
     assert infos["d"].dtype is not None
     assert infos["e"].unique is not None
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pl.Int64,
+        pl.UInt8(),
+        pl.String,
+        pl.Categorical,
+        pl.Datetime,
+        pl.Datetime(time_unit="ms", time_zone="Europe/Oslo"),
+        pl.Duration(time_unit="ns"),
+        pl.Decimal(precision=10, scale=2),
+        pl.List(pl.Int64),
+        pl.List(pl.List(pl.Float32)),
+        pl.Array(pl.Int64, shape=(2, 3)),
+        pl.Enum(["a", "b"]),
+        pl.Struct({"a": pl.Int64, "b": pl.List(pl.String)}),
+    ],
+)
+def test_column_info_dtype_round_trip(dtype: pl.DataType) -> None:
+    """Test that every serialized dtype deserializes back to the same dtype."""
+    info = ColumnInfo(dtype=dtype)
+    assert ColumnInfo.model_validate_json(info.model_dump_json()).dtype == dtype
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "__import__('os').system('echo pwned')",
+        "Int64.__class__",
+        "List(__import__('os'))",
+        "().__class__.__mro__[1].__subclasses__()",
+        "Struct(**{'a': Int64})",
+        "Struct({**{'a': Int64}})",
+        "not a dtype",
+        "",
+    ],
+)
+def test_column_info_dtype_rejects_arbitrary_code(payload: str) -> None:
+    """Test that dtype deserialization never evaluates arbitrary Python code."""
+    with pytest.raises(ValidationError):
+        ColumnInfo.model_validate_json(json.dumps({"dtype": payload}))
+    with pytest.raises(ValidationError):
+        ColumnInfo(dtype=payload)  # type: ignore[arg-type]
 
 
 def test_missing_date_struct():

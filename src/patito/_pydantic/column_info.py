@@ -1,14 +1,56 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import io
 import json
-from typing import Annotated, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 import polars as pl
-from polars.datatypes import *  # noqa: F403 # type: ignore
+import polars.datatypes
 from polars.datatypes import DataType, DataTypeClass
 from polars.exceptions import ComputeError
 from pydantic import BaseModel, BeforeValidator, field_serializer
+
+_DTYPES: dict[str, DataTypeClass] = {
+    name: obj
+    for name, obj in vars(polars.datatypes).items()
+    if inspect.isclass(obj) and issubclass(obj, DataType)
+}
+
+
+def _parse_dtype_node(node: ast.expr) -> Any:
+    """Evaluate the subset of Python syntax produced by ``str(dtype)``.
+
+    Only polars dtype names, calls to them, and literals are accepted, so that
+    deserializing untrusted json can never execute arbitrary code.
+    """
+    if isinstance(node, ast.Name):
+        if node.id in _DTYPES:
+            return _DTYPES[node.id]
+        raise ValueError(f"Unknown polars dtype {node.id!r}.")
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        args = [_parse_dtype_node(arg) for arg in node.args]
+        kwargs = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                raise ValueError("Unpacking is not supported in dtypes.")
+            kwargs[kw.arg] = _parse_dtype_node(kw.value)
+        return _parse_dtype_node(node.func)(*args, **kwargs)
+    elif isinstance(node, ast.Constant):
+        return node.value
+    elif isinstance(node, ast.List):
+        return [_parse_dtype_node(e) for e in node.elts]
+    elif isinstance(node, ast.Tuple):
+        return tuple(_parse_dtype_node(e) for e in node.elts)
+    elif isinstance(node, ast.Dict):
+        items = {}
+        for key, value in zip(node.keys, node.values):
+            if key is None:
+                raise ValueError("Unpacking is not supported in dtypes.")
+            items[_parse_dtype_node(key)] = _parse_dtype_node(value)
+        return items
+    raise ValueError(f"Unsupported syntax in dtype: {ast.dump(node)}")
 
 
 def dtype_deserializer(dtype: str | DataTypeClass | DataType | None):
@@ -19,7 +61,11 @@ def dtype_deserializer(dtype: str | DataTypeClass | DataType | None):
         if dtype == "null" or dtype is None:
             return None
         else:
-            return eval(dtype)
+            try:
+                tree = ast.parse(dtype, mode="eval")
+            except SyntaxError as e:
+                raise ValueError(f"{dtype!r} is not a valid polars dtype.") from e
+            return _parse_dtype_node(tree.body)
 
 
 def expr_deserializer(
