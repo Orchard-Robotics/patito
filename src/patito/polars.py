@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Sequence
+import functools
+import io
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,7 +16,7 @@ from typing import (
 
 import polars as pl
 from polars._typing import IntoExpr
-from pydantic import AliasChoices, AliasPath, create_model
+from pydantic import AliasChoices, AliasGenerator, AliasPath, create_model
 
 from patito._pydantic.column_info import ColumnInfo
 from patito.exceptions import MultipleRowsReturned, RowDoesNotExist
@@ -30,6 +32,48 @@ LDF = TypeVar("LDF", bound="LazyFrame")
 ModelType = TypeVar("ModelType", bound="Model")
 OtherModelType = TypeVar("OtherModelType", bound="Model")
 T = TypeVar("T")
+
+
+@functools.cache
+def _headerless_column_offset() -> int:
+    """Return the index Polars numbers a headerless CSV's default column names from.
+
+    Polars 1 names them ``column_1``, ``column_2``, ...; Polars 2 names them
+    ``column_0``, ``column_1``, ...
+    """
+    probe = pl.read_csv(io.BytesIO(b"0"), has_header=False)
+    return int(probe.columns[0].removeprefix("column_"))
+
+
+def _alias_generator_func(model: type[Model]) -> Callable[[str], Any] | None:
+    """Return the function a model's alias generator renames columns with, if any."""
+    alias_gen = model.model_config.get("alias_generator")
+    if isinstance(alias_gen, AliasGenerator):
+        return alias_gen.validation_alias or alias_gen.alias
+    return alias_gen
+
+
+def _rewindable_csv_source(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Return ``read_csv`` arguments whose source can be read more than once.
+
+    A file-like source is consumed by reading it, so it is buffered into bytes.
+    Paths and bytes are returned as they are.
+    """
+    in_args = bool(args)
+    source = args[0] if in_args else kwargs.get("source")
+    if not hasattr(source, "read"):
+        return args, kwargs
+    data = source.read()
+    kwargs = dict(kwargs)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+        kwargs["encoding"] = "utf8"
+    if in_args:
+        return (data, *args[1:]), kwargs
+    kwargs["source"] = data
+    return args, kwargs
 
 
 class ModelGenerator(Iterator[ModelType], Generic[ModelType]):
@@ -125,10 +169,22 @@ class LazyFrame(pl.LazyFrame, Generic[ModelType]):
         """
         background = kwargs.pop("background", False)
         df: pl.DataFrame = super().collect(*args, background=background, **kwargs)
-        df = DataFrame(df)
+        return self._wrap_collected(df)
+
+    def _collect_eager(self, *args: Any, **kwargs: Any) -> DataFrame[ModelType]:
+        # Newer Polars implements eager DataFrame methods (filter, with_columns,
+        # fill_null, ...) as ``self.lazy()...._collect_eager()``, which bypasses
+        # ``collect`` above. Without this override those methods hand back a
+        # plain ``pl.DataFrame`` and the model is lost. Older Polars never calls
+        # it, so it is harmless there.
+        df: pl.DataFrame = super()._collect_eager(*args, **kwargs)  # type: ignore[misc]
+        return self._wrap_collected(df)
+
+    def _wrap_collected(self, df: pl.DataFrame) -> DataFrame[ModelType]:
+        wrapped = DataFrame(df)
         if getattr(self, "model", False):
-            df = df.set_model(self.model)
-        return df
+            wrapped = wrapped.set_model(self.model)
+        return wrapped
 
     def derive(self: LDF, columns: list[str] | None = None) -> LDF:
         """Populate columns which have ``pt.Field(derived_from=...)`` definitions.
@@ -912,7 +968,7 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
             >>> df = pt.DataFrame({"product_id": [1, 2], "price": [10., 20.]})
             >>> df = df.set_model(Product)
             >>> for product in df.iter_models():
-            ...     print(product)
+            ...     print(repr(product))
             ...
             Product(product_id=1, price=10.0)
             Product(product_id=2, price=20.0)
@@ -1041,23 +1097,72 @@ class DataFrame(pl.DataFrame, Generic[ModelType]):
         """
         kwargs.setdefault("schema_overrides", cls.model.dtypes)
         has_header = kwargs.get("has_header", True)
-        if not has_header and "columns" not in kwargs:
-            kwargs.setdefault("new_columns", cls.model.columns)
-        alias_gen = cls.model.model_config.get("alias_generator")
-        if alias_gen:
-            alias_func = alias_gen.validation_alias or alias_gen.alias
-        if has_header and alias_gen and alias_func:
-            fields_to_cols = {
-                field_name: alias_func(field_name)
-                for field_name in cls.model.model_fields
+        if not has_header and "columns" not in kwargs and "new_columns" not in kwargs:
+            return cls._read_headerless_csv(*args, **kwargs)
+        alias_func = _alias_generator_func(cls.model) if has_header else None
+        renaming: dict[str, str] = {}
+        if alias_func is not None:
+            # As in validation, the alias generator maps a column name in the data
+            # to a field name. The headers are read first so that the dtype
+            # overrides, which are keyed by field name, can be keyed by the header
+            # they apply to: Polars matches overrides to headers by name.
+            args, kwargs = _rewindable_csv_source(args, kwargs)
+            probe_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ("schema_overrides", "n_rows")
             }
+            headers = pl.read_csv(*args, n_rows=0, **probe_kwargs).columns
+            for header in headers:
+                name = alias_func(header)
+                # A header that already is the target name keeps that name.
+                if isinstance(name, str) and name != header and name not in headers:
+                    renaming[header] = name
+            to_header = {name: header for header, name in renaming.items()}
             kwargs["schema_overrides"] = {
-                fields_to_cols.get(field, field): dtype
-                for field, dtype in kwargs["schema_overrides"].items()
+                to_header.get(column, column): dtype
+                for column, dtype in kwargs["schema_overrides"].items()
             }
-            # TODO: other forms of alias setting like in Field
-        df = cls.model.DataFrame._from_pydf(pl.read_csv(*args, **kwargs)._df)
-        return df.derive()
+        df = pl.read_csv(*args, **kwargs)
+        if renaming:
+            df = df.rename({k: v for k, v in renaming.items() if k in df.columns})
+        return cls.model.DataFrame._from_pydf(df._df).derive()
+
+    @classmethod
+    def _read_headerless_csv(  # type: ignore[no-untyped-def]
+        cls: type[DF],
+        *args,  # noqa: ANN002
+        **kwargs,  # noqa: ANN003
+    ) -> DF:
+        """Read a headerless CSV, naming its leading columns after the model.
+
+        Passing the model columns as ``new_columns`` would be simpler, but Polars
+        2 refuses a ``new_columns`` shorter than the file is wide. So the file is
+        read under Polars' own default names, with the dtype overrides keyed by
+        those names, and renamed by position afterwards. Columns beyond the model
+        are named ``column_1``, ``column_2``, ... counting from the first column of
+        the file, as Polars 1 names them, rather than from ``column_0`` as Polars 2
+        does, so the result is the same on either version.
+        """
+        model_columns = cls.model.columns
+        offset = _headerless_column_offset()
+        default_names = [f"column_{i + offset}" for i in range(len(model_columns))]
+        to_default = dict(zip(model_columns, default_names))
+        kwargs["schema_overrides"] = {
+            to_default.get(column, column): dtype
+            for column, dtype in kwargs["schema_overrides"].items()
+        }
+        df = pl.read_csv(*args, **kwargs)
+        if df.width < len(model_columns):
+            raise pl.exceptions.ShapeError(
+                f"{len(model_columns)} column names provided for a DataFrame of "
+                f"width {df.width}"
+            )
+        names = model_columns + [
+            f"column_{i + 1}" for i in range(len(model_columns), df.width)
+        ]
+        df = df.rename(dict(zip(df.columns, names)))
+        return cls.model.DataFrame._from_pydf(df._df).derive()
 
     def to_polars(self) -> pl.DataFrame:
         """Convert the custom DataFrame to a polars DataFrame."""

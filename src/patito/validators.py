@@ -34,6 +34,20 @@ from patito.exceptions import (
     UnvalidatedConstraintWarning,
 )
 
+
+# Late Polars 1.x added ``empty_as_null`` to ``explode`` and warns when it is left
+# out, because its default flips from True to False in 2.0. It is pinned to True,
+# the only behaviour older Polars has, so validation answers the same on every
+# version, and passed only where the installed Polars accepts it.
+def _explode_kwargs(explode: Callable[..., Any]) -> dict[str, bool]:
+    if "empty_as_null" in inspect.signature(explode).parameters:
+        return {"empty_as_null": True}
+    return {}
+
+
+_EXPLODE_KWARGS = _explode_kwargs(pl.DataFrame.explode)
+_EXPR_EXPLODE_KWARGS = _explode_kwargs(pl.Expr.explode)
+
 try:
     import pandas as pd  # type: ignore
 
@@ -678,7 +692,7 @@ def _register_checks(  # noqa: C901
             nested_frame = (
                 nested_frame.select(column_name)
                 .filter(pl.col(column_name).list.len() > 0)
-                .explode(column_name)
+                .explode(column_name, **_EXPLODE_KWARGS)
                 .unnest(column_name)
             )
 
@@ -815,7 +829,7 @@ def _register_enum_check(
 
     column = pl.col(column_name)
     if isinstance(dtype, pl.List):
-        column = column.explode()
+        column = column.explode(**_EXPR_EXPLODE_KWARGS)
     # Imploding the distinct values keeps this a single-row aggregation, so that it can
     # be evaluated alongside every other check
     checks.defer(dataframe, column.unique().implode(), _impermissible_values)

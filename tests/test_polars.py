@@ -226,7 +226,8 @@ def test_correct_columns_and_dtype_on_read_regular_inferred(tmp_path):
     csv_path.write_text("1,2")
 
     regular_df = pl.read_csv(csv_path, has_header=False)
-    assert regular_df.columns == ["column_1", "column_2"]
+    # Polars 1 numbers default column names from 1, Polars 2 from 0.
+    assert regular_df.columns in (["column_1", "column_2"], ["column_0", "column_1"])
     assert regular_df.dtypes == [pl.Int64, pl.Int64]
 
 
@@ -349,6 +350,11 @@ def test_correct_columns_and_dtype_on_read_alias_gen(tmp_path):
     aliased_df = AliasedModel.DataFrame.read_csv(csv_path)
     assert aliased_df.columns == ["A", "B"]
     assert aliased_df.equals(AliasedModel.DataFrame({"A": [1], "B": [2]}))
+
+    # Columns are matched by name, not by position.
+    csv_path.write_text("b,a\n1,2")
+    aliased_df = AliasedModel.DataFrame.read_csv(csv_path)
+    assert aliased_df.equals(AliasedModel.DataFrame({"A": [2], "B": [1]}))
 
 
 def test_derive_functionality() -> None:
@@ -677,6 +683,18 @@ def test_alias_generator_read_csv() -> None:
     df = AliasGeneratorModel.DataFrame.read_csv(csv_data)
     df.validate()
     assert df.to_dicts() == [{"My_Val_A": 1, "My_Val_B": None}]
+
+
+def test_plain_alias_generator_read_csv() -> None:
+    """A bare callable alias generator is applied to read_csv as well."""
+
+    class PlainAliasModel(pt.Model):
+        model_config = ConfigDict(alias_generator=str.title)
+
+        My_Val: int
+
+    df = PlainAliasModel.DataFrame.read_csv(StringIO("my_val\n1"))
+    assert df.to_dicts() == [{"My_Val": 1}]
 
 
 def test_iter_models() -> None:

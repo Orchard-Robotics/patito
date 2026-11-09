@@ -289,11 +289,9 @@ def test_validate_non_nullable_columns() -> None:
         column_2: Optional[int] = None
 
     # We insert nulls into a non-optional column, causing an exception
-    wrong_nulls_df = pl.DataFrame().with_columns(
-        [
-            pl.lit(None).cast(pl.Int64).alias("column_1"),
-            pl.lit(None).cast(pl.Int64).alias("column_2"),
-        ]
+    wrong_nulls_df = pl.DataFrame(
+        {"column_1": [None], "column_2": [None]},
+        schema={"column_1": pl.Int64, "column_2": pl.Int64},
     )
     with pytest.raises(DataFrameValidationError) as e_info:
         validate(
