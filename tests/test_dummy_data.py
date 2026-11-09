@@ -1,7 +1,7 @@
 """Test of functionality related to the generation of dummy data."""
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal, Optional
 
@@ -190,3 +190,27 @@ def test_nested_models() -> None:
 
     example_model = ParentModel.example()
     ParentModel.examples()
+
+
+def test_examples_with_temporal_defaults() -> None:
+    """Temporal defaults and string temporal values become typed literals.
+
+    Polars 2.0 removed string-to-temporal casts, which ``examples()`` relied on
+    for the ISO strings the JSON schema holds temporal defaults as.
+    """
+
+    class TemporalModel(pt.Model):
+        row: int
+        day: date = pt.Field(default=date(2026, 1, 1), dtype=pl.Date)
+        at: datetime = pt.Field(
+            default=datetime(2026, 1, 1, 12), dtype=pl.Datetime("us")
+        )
+        clock: time = pt.Field(default=time(12, 30), dtype=pl.Time)
+
+    df = TemporalModel.examples({"row": [1, 2]})
+    assert df["day"].to_list() == [date(2026, 1, 1)] * 2
+    assert df["at"].to_list() == [datetime(2026, 1, 1, 12)] * 2
+    assert df["clock"].to_list() == [time(12, 30)] * 2
+
+    df = TemporalModel.examples({"row": [1], "day": "2026-06-17"})
+    assert df["day"].to_list() == [date(2026, 6, 17)]

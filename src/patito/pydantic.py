@@ -1072,7 +1072,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                     )
                 else:
                     example_value = cls.example_value(field=column_name)
-                    series.append(pl.lit(example_value, dtype=dtype).alias(column_name))
+                    series.append(_typed_lit(example_value, dtype).alias(column_name))
                 continue
 
             value = kwargs.get(column_name)
@@ -1082,7 +1082,7 @@ class Model(BaseModel, metaclass=ModelMetaclass):
                 # series and literate values.
                 series.insert(0, pl.Series(name=column_name, values=value, dtype=dtype))
             else:
-                series.append(pl.lit(value, dtype=dtype).alias(column_name))
+                series.append(_typed_lit(value, dtype).alias(column_name))
 
         return cls.DataFrame._from_pydf(
             pl.select(series)
@@ -1677,3 +1677,24 @@ def attach_column_info(field: fields.FieldInfo, **kwargs: Any) -> fields.FieldIn
     if isinstance(attributes_set, dict):
         attributes_set["json_schema_extra"] = extra
     return field
+
+
+def _typed_lit(value: Any, dtype: DataType | DataTypeClass) -> pl.Expr:
+    """Return ``pl.lit(value, dtype=dtype)``, parsing a string for a temporal dtype.
+
+    A temporal default reaches ``examples()`` as the ISO string the JSON schema
+    holds it as. Polars 1.x would cast that string to the temporal dtype; Polars
+    2.0 removed string-to-temporal casts, so the string is parsed with the
+    ``str`` namespace instead, which does the same on both versions.
+    """
+    if isinstance(value, str):
+        parsed = pl.Series([value]).str
+        if dtype == pl.Date:
+            value = parsed.to_date()[0]
+        elif dtype == pl.Time:
+            value = parsed.to_time()[0]
+        elif isinstance(dtype, pl.Datetime):
+            value = parsed.to_datetime(
+                time_unit=dtype.time_unit, time_zone=dtype.time_zone
+            )[0]
+    return pl.lit(value, dtype=dtype)
